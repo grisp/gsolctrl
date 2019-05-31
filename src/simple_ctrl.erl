@@ -10,9 +10,10 @@
          terminate/2, code_change/3, format_status/2]).
 
 -define(cycle_time, 5*1000).
--define(trigger_cycle, 15*1000).
--define(give_up, 3*1000).
+-define(trigger_cycle, 15*60*1000).
+-define(give_up, 3*60*1000).
 -define(hyst, 5.0).
+-define(min_sf, 45.0).
 
 -record(state, {pump1, buffer1_valve, hot_water_buffer1, solar_flow,
                 trying}).
@@ -28,6 +29,9 @@ trigger_pump(1) ->
 
 
 init([]) ->
+    grisp_gpio:configure(map_actuator(pump1), output_0),
+    grisp_gpio:configure(map_actuator(pump1_valve), output_0),
+    grisp_gpio:configure(map_actuator(buffer1_valve), output_0),
     timer:send_interval(?trigger_cycle, trigger),
     timer:send_interval(?cycle_time, measure),
     self() ! trigger,
@@ -71,8 +75,8 @@ format_status(_Opt, Status) ->
 control_logic(State) ->
     control_logic0(control_logic1(State)).
 
-control_logic0(#state{trying=T, buffer1_valve=B}=State)
-  when T =:= true; B =:= loading ->
+control_logic0(#state{trying=T, buffer1_valve=B, solar_flow=Sf}=State)
+  when T =:= true; B =:= loading; Sf > ?min_sf ->
     State#state{pump1 = on};
 control_logic0(State) ->
     State#state{pump1 = off}.
@@ -90,14 +94,29 @@ control_logic1(State) ->
 
 update_actuators(#state{pump1 = P1, buffer1_valve = B1}=State) ->
     case B1 of
-        loading -> grisp_led:color(2, red);
-        bypass -> grisp_led:off(2)
+        loading -> grisp_led:color(2, red),
+                   grisp_gpio:set(map_actuator(buffer1_valve));
+        bypass -> grisp_led:off(2),
+                  grisp_gpio:clear(map_actuator(buffer1_valve))
     end,
     case P1 of
-        on -> grisp_led:color(1, blue);
-        off -> grisp_led:off(1)
+        on -> grisp_led:color(1, blue),
+              grisp_gpio:set(map_actuator(pump1)),
+              grisp_gpio:set(map_actuator(pump1_valve));
+        off -> grisp_led:off(1),
+              grisp_gpio:clear(map_actuator(pump1)),
+              grisp_gpio:clear(map_actuator(pump1_valve))
     end,
     State.
+
+map_actuator(pump1) ->
+    gpio1_1;
+map_actuator(pump1_valve) ->
+    gpio1_2;
+map_actuator(buffer1_valve) ->
+    gpio1_3.
+
+
 
 get_recorded_temp(Sens) ->            
     Val = temp_sens:get_temp(Sens),
