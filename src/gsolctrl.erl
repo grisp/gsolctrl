@@ -12,11 +12,7 @@
 
 start(_Type, _Args) -> 
     {ok, Sup} = gsolctrl_sup:start_link(),
-    Random = fun() -> 
-      {rand:uniform(2) - 1, rand:uniform(2) -1, rand:uniform(2) - 1} 
-    end, 
-    grisp_led:pattern(1, [{100, Random}]),
-    grisp_led:pattern(2, [{100, Random}]),
+    grisp_led:flash(1, yellow, 500),
     {ok, Sup}.
 
 stop(_State) -> ok.
