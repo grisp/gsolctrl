@@ -48,9 +48,11 @@ handle_call(_Request, _From, State) ->
 handle_cast(_Request, State) ->
     {noreply, State}.
 
-handle_info(measure, State) ->
+handle_info(measure, #state{pump1=P1, buffer1_valve=Bv1}=State) ->
     Hw = get_recorded_temp(hot_water_buffer1),
     Sf = get_recorded_temp(solar_flow),
+    record_actuator(pump1, P1),
+    record_actuator(buffer1_valve, Bv1),
     S1 = State#state{hot_water_buffer1=Hw,
                      solar_flow=Sf},
     {noreply, update_actuators(control_logic(S1))};
@@ -83,11 +85,11 @@ control_logic0(State) ->
 
 control_logic1(#state{solar_flow = Sf, hot_water_buffer1=Hw, 
                       pump1=P1}=State)
-  when P1 =:= on, Sf > Hw + ?hyst ->
+  when P1 =:= on, Sf > Hw + ?hyst, Hw =< 95.0 ->
     State#state{buffer1_valve = loading};
 control_logic1(#state{solar_flow = Sf, hot_water_buffer1=Hw, 
                       pump1=P1}=State)
-  when P1 =:= off; Sf < Hw ->
+  when P1 =:= off; Sf < Hw; Hw > 95.0 ->
     State#state{buffer1_valve = bypass};
 control_logic1(State) ->
     State.
@@ -116,17 +118,11 @@ map_actuator(pump1_valve) ->
 map_actuator(buffer1_valve) ->
     gpio1_3.
 
-
-
 get_recorded_temp(Sens) ->            
     Val = temp_sens:get_temp(Sens),
-    record_temp(Sens, Val),
+    catch influxdb:record_data(temp, Sens, Val),
     Val.
 
-record_temp(Sens, Value) ->
-    Data = iolist_to_binary(
-             io_lib:format("sol,type=temp,unit=celsius,sensor=~p value=~f\n", 
-                           [Sens, Value])),
-    httpc:request(post, {"http://yrael:8086/write?db=gsolctrl", [], 
-                         "application/binary", 
-                         Data}, [], []).
+record_actuator(Act, Val) ->
+    catch influxdb:record_data(act, Act, Val).
+    
