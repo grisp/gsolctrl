@@ -16,8 +16,12 @@ start_link() -> supervisor:start_link({local, ?MODULE}, ?MODULE, []).
 
 %--- Callbacks -----------------------------------------------------------------
 
-init([]) -> {ok, { {one_for_all, 0, 1}, 
-                   [
-                    #{id => simple_ctrl,
-                      start => {simple_ctrl, start_link, []}
-                     }]}}.
+init([]) -> {ok, {#{strategy => one_for_all,
+                   intensity => 10,
+                   period => 60}, 
+                  [
+                   #{id => influxdb,
+                     start => {influxdb, start_link, []}},
+                   #{id => simple_ctrl,
+                     start => {simple_ctrl, start_link, []}
+                    }]}}.
