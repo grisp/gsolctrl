@@ -9,13 +9,15 @@
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2,
          terminate/2, code_change/3, format_status/2]).
 
--define(cycle_time, 5*1000).
+-define(cycle_time, 30*1000).
 -define(trigger_cycle, 15*60*1000).
 -define(give_up, 3*60*1000).
 -define(hyst, 5.0).
 -define(min_sf, 45.0).
 
--record(state, {pump1, buffer1_valve, hot_water_buffer1, solar_flow,
+-record(state, {pump1, buffer1_valve, woodstove, heating_circulation,
+                hot_water_buffer1, hot_water_buffer2,
+                solar_flow, wood_flow, heating_return,
                 trying}).
 
 start() ->
@@ -32,13 +34,20 @@ init([]) ->
     grisp_gpio:configure(map_actuator(pump1), output_0),
     grisp_gpio:configure(map_actuator(pump1_valve), output_0),
     grisp_gpio:configure(map_actuator(buffer1_valve), output_0),
+    grisp_gpio:configure(map_actuator(woodstove_buffer1), output_0),
+    grisp_gpio:configure(map_actuator(heating_circulation), output_0),
     timer:send_interval(?trigger_cycle, trigger),
     timer:send_interval(?cycle_time, measure),
     self() ! trigger,
     {ok, #state{pump1 = off,
                 buffer1_valve = bypass,
+                woodstove = heating,
+                heating_circulation = off,
                 hot_water_buffer1 = 0.0,
+                hot_water_buffer2 = 0.0,
                 solar_flow = 0.0,
+                wood_flow = 0.0,
+                heating_return = 0.0,
                 trying = false}}.
 
 handle_call(_Request, _From, State) ->
@@ -49,12 +58,18 @@ handle_cast(_Request, State) ->
     {noreply, State}.
 
 handle_info(measure, #state{pump1=P1, buffer1_valve=Bv1}=State) ->
-    Hw = get_recorded_temp(hot_water_buffer1),
+    Hw1 = get_recorded_temp(hot_water_buffer1),
+    Hw2 = get_recorded_temp(hot_water_buffer2),
     Sf = get_recorded_temp(solar_flow),
+    Wf = get_recorded_temp(wood_flow),
+    Hr = get_recorded_temp(heating_return),
     record_actuator(pump1, P1),
     record_actuator(buffer1_valve, Bv1),
-    S1 = State#state{hot_water_buffer1=Hw,
-                     solar_flow=Sf},
+    S1 = State#state{hot_water_buffer1=Hw1,
+                     hot_water_buffer2=Hw2,
+                     solar_flow=Sf,
+                     wood_flow=Wf,
+                     heating_return=Hr},
     {noreply, update_actuators(control_logic(S1))};
 handle_info(trigger, State) ->
     erlang:send_after(?give_up, self(), give_up),
@@ -75,7 +90,7 @@ format_status(_Opt, Status) ->
     Status.
 
 control_logic(State) ->
-    control_logic0(control_logic1(State)).
+    control_logic0(control_logic1(control_logic2(State))).
 
 control_logic0(#state{trying=T, buffer1_valve=B, solar_flow=Sf}=State)
   when T =:= true; B =:= loading; Sf > ?min_sf ->
@@ -94,7 +109,20 @@ control_logic1(#state{solar_flow = Sf, hot_water_buffer1=Hw,
 control_logic1(State) ->
     State.
 
-update_actuators(#state{pump1 = P1, buffer1_valve = B1}=State) ->
+control_logic2(#state{woodstove = heating, wood_flow = Wf, 
+                      hot_water_buffer1 = Hw1, hot_water_buffer2 = Hw2}=State)
+  when Wf > Hw1 + ?hyst, Hw1 =< 95.0, Hw2 =< 55 ->
+    State#state{woodstove = water};
+control_logic2(#state{woodstove = water, wood_flow = Wf, 
+                      hot_water_buffer1 = Hw1, hot_water_buffer2 = Hw2}=State)
+  when Wf < Hw1; Hw1 > 95.0; Hw2 > 55 + ?hyst ->
+    State#state{woodstove = heating};
+control_logic2(State) ->
+    State.
+    
+
+update_actuators(#state{pump1 = P1, buffer1_valve = B1, 
+                        woodstove = Ws, heating_circulation = He}=State) ->
     case B1 of
         loading -> grisp_led:color(2, red),
                    grisp_gpio:set(map_actuator(buffer1_valve));
@@ -109,6 +137,14 @@ update_actuators(#state{pump1 = P1, buffer1_valve = B1}=State) ->
               grisp_gpio:clear(map_actuator(pump1)),
               grisp_gpio:clear(map_actuator(pump1_valve))
     end,
+    case Ws of
+        heating -> grisp_gpio:clear(map_actuator(woodstove_buffer1));
+        water -> grisp_gpio:set(map_actuator(woodstove_buffer1))
+    end,
+    case He of
+        on -> grisp_gpio:set(map_actuator(heating_circulation));
+        off -> grisp_gpio:clear(map_actuator(heating_circulation))
+    end,
     State.
 
 map_actuator(pump1) ->
@@ -116,7 +152,11 @@ map_actuator(pump1) ->
 map_actuator(pump1_valve) ->
     gpio1_2;
 map_actuator(buffer1_valve) ->
-    gpio1_3.
+    gpio1_3;
+map_actuator(woodstove_buffer1) ->
+    gpio1_4;
+map_actuator(heating_circulation) ->
+    gpio2_1.
 
 get_recorded_temp(Sens) ->            
     Val = temp_sens:get_temp(Sens),
