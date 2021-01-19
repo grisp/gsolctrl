@@ -15,7 +15,7 @@
 -define(hyst, 5.0).
 -define(min_sf, 45.0).
 
--record(state, {pump1, buffer1_valve, woodstove, heating_circulation,
+-record(state, {pump1, buffer1_valve, heating_buffer_valve, woodstove, heating_circulation,
                 hot_water_buffer1, hot_water_buffer2,
                 solar_flow, wood_flow, heating_return,
                 trying}).
@@ -34,6 +34,7 @@ init([]) ->
     grisp_gpio:configure(map_actuator(pump1), output_0),
     grisp_gpio:configure(map_actuator(pump1_valve), output_0),
     grisp_gpio:configure(map_actuator(buffer1_valve), output_0),
+    grisp_gpio:configure(map_actuator(heating_buffer_valve), output_0),
     grisp_gpio:configure(map_actuator(woodstove_buffer1), output_0),
     grisp_gpio:configure(map_actuator(heating_circulation), output_0),
     timer:send_interval(?trigger_cycle, trigger),
@@ -90,7 +91,7 @@ format_status(_Opt, Status) ->
     Status.
 
 control_logic(State) ->
-    control_logic0(control_logic1(control_logic2(State))).
+    control_logic0(control_logic1(control_logic2(control_logic3(State)))).
 
 control_logic0(#state{trying=T, buffer1_valve=B, solar_flow=Sf}=State)
   when T =:= true; B =:= loading; Sf > ?min_sf ->
@@ -118,6 +119,17 @@ control_logic2(#state{woodstove = water, wood_flow = Wf,
   when Wf < Hw1; Hw1 > 95.0; Hw2 > 55 + ?hyst ->
     State#state{woodstove = heating};
 control_logic2(State) ->
+    State.
+
+control_logic3(#state{woodstove = heating, wood_flow = Wf, 
+                      heating_return=Hr}=State)
+  when Wf > 75.0 + ?hyst andalso Hr > 50.0 + ?hyst ->
+    State#state{heating_circulation=off};
+control_logic3(#state{woodstove = heating, wood_flow = Wf, 
+                      heating_return=Hr}=State)
+  when Wf < 75.0 orelse Hr < 50.0 ->
+    State#state{heating_circulation=on};
+control_logic3(State) ->
     State.
     
 
@@ -153,6 +165,8 @@ map_actuator(pump1_valve) ->
     gpio1_2;
 map_actuator(buffer1_valve) ->
     gpio1_3;
+map_actuator(heating_buffer_valve) ->
+    gpio2_2;
 map_actuator(woodstove_buffer1) ->
     gpio1_4;
 map_actuator(heating_circulation) ->
